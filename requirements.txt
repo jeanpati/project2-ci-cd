@@ -4,7 +4,6 @@
 
 azure-functions
 azure-storage-blob
-pandas
-dotenv
 sqlalchemy
-psycopg2-binary
+pandas
+openpyxl
