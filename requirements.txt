@@ -7,3 +7,4 @@ azure-storage-blob
 sqlalchemy
 pandas
 openpyxl
+polars

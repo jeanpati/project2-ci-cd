@@ -1,5 +1,5 @@
 import os
-import pandas as pd
+import polars as pl
 import azure.functions as func
 import logging
 from azure.storage.blob import BlobServiceClient
@@ -15,9 +15,13 @@ def download_file_from_blob(blob_service_client, container_name, blob_name):
     # Add an IF to be able to handle .xlsx and .csv (part3)
     try:
         blob_client = blob_service_client.get_blob_client(container=container_name, blob=blob_name)
-        blob_bytes = blob_client.download_blob().readall()  
-        df = pd.read_csv(StringIO(blob_bytes))
-        print(f"Downloaded {blob_name} from container {container_name}")            
+        # blob_bytes is the .csv stored as BYTES
+        # the bytes are UTF-8
+        blob_bytes = blob_client.download_blob().readall()
+        df = pl.read_csv(blob_bytes, encoding='utf8', schema_overrides={
+            "Provider License Number_6": pl.Utf8
+        })
+        print(f"Downloaded {blob_name} from container {container_name}")
         return df
     except Exception as e:
         print(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
@@ -32,15 +36,21 @@ def push_to_postgres(dataframe, engine, blob_name):
 def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Triggered')
 
-    blob_service_client = get_blob_service_client()
-    container_name = os.getenv('AZURE_STORAGE_CONTAINER_NAME')
+    try:
+        blob_service_client = get_blob_service_client()
+        container_name = os.getenv('AZURE_STORAGE_CONTAINER_NAME')
+    except Exception as e:
+        print(f"Error obtaining connection to Azure Blob Service Client: {e}")
 
     files_to_process = [
         ("nppes_sample.csv")
     ]
 
-    for blob_name in files_to_process:
-        df = download_file_from_blob(blob_service_client, container_name, blob_name)
-        print(df.head())
+    try:
+        for blob_name in files_to_process:
+            df = download_file_from_blob(blob_service_client, container_name, blob_name)
+            print(df.head())
+    except Exception as e:
+        print(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
 
     return func.HttpResponse("Success", status_code=200)
