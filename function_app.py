@@ -22,36 +22,13 @@ def create_postgres_engine():
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 
-# engine = create_engine(create_postgres_engine(), echo=True)
-# session_local = sessionmaker(bind=engine)
+engine = create_engine(create_postgres_engine(), echo=True)
+session_local = sessionmaker(bind=engine)
 
 
 def get_blob_service_client():
     conn_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     return BlobServiceClient.from_connection_string(conn_string)
-
-
-def download_file_from_blob_all(blob_service_client, container_name, blob_name):
-    try:
-        start_time = time.perf_counter()
-        blob_client = blob_service_client.get_blob_client(
-            container=container_name, blob=blob_name
-        )
-        blob_bytes = blob_client.download_blob().readall()
-        df = pl.read_csv(
-            blob_bytes,
-            encoding="utf8",
-            batch_size=10000,
-            schema_overrides={
-                "Provider License Number_6": pl.Utf8,
-                "Other Provider Identifier_8": pl.Utf8,
-            },
-        )
-        end_time = time.perf_counter()
-        print(f"{end_time - start_time}s")
-        return df
-    except Exception as e:
-        print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
 
 def download_file_from_blob_batched(blob_service_client, container_name, blob_name):
@@ -104,15 +81,6 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
 
     files_to_process = ["nppes_sample.csv"]
 
-    # No Batching
-    # try:
-    #     for blob_name in files_to_process:
-    #         df = download_file_from_blob_all(blob_service_client, container_name, blob_name)
-    # except Exception as e:
-    #     logging.error(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
-    #     return func.HttpResponse("Failed", status_code=400)
-
-    # Batching
     try:
         for blob_name in files_to_process:
             logging.info(
@@ -125,15 +93,27 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
             if batches is not None:
                 i = 1
                 total_records = 0
+                postgres_count = 0
                 while True:
                     batch_list = batches.next_batches(1)
                     if not batch_list:
                         break
                     for batch in batch_list:
                         logging.info(f"Batch {i}: {batch.shape[0]} records")
+                        try:
+                            push_to_postgres(batch.to_pandas(), engine, blob_name)
+                            logging.info(
+                                f"Uploaded batch: {i} to postgres sucessfully!"
+                            )
+                            postgres_count += 1
+                        except Exception as e:
+                            logging.error(
+                                f"Error uploading batch: {i} to postgres: {e}"
+                            )
                         total_records += batch.shape[0]
                         i += 1
                 logging.info(f"{total_records} records processed in {i - 1} batches")
+                logging.info(f"{postgres_count} batches uploaded to Postgres")
     except Exception as e:
         logging.error(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
         return func.HttpResponse("Failed", status_code=400)
