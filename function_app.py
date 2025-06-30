@@ -3,11 +3,27 @@ import polars as pl
 import azure.functions as func
 import logging
 from azure.storage.blob import BlobServiceClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 import csv
 import tempfile
 import time
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+
+def create_postgres_engine():
+    user = os.getenv("DATABASE_USER")
+    password = os.getenv("DATABASE_PASSWORD")
+    host = os.getenv("DATABASE_HOST")
+    port = os.getenv("DATABASE_PORT")
+    db = os.getenv("DATABASE_DB")
+
+    return f"postgresql://{user}:{password}@{host}:{port}/{db}"
+
+
+engine = create_engine(create_postgres_engine(), echo=True)
+session_local = sessionmaker(bind=engine)
 
 
 def get_blob_service_client():
