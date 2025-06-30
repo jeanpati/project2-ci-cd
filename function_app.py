@@ -52,7 +52,7 @@ def download_file_from_blob_batched(blob_service_client, container_name, blob_na
                 tmp.name,
                 encoding="utf8",
                 truncate_ragged_lines=False,
-                batch_size=10000,
+                batch_size=250,
                 schema_overrides=schema,
             )
         end_time = time.perf_counter()
@@ -100,16 +100,21 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                         break
                     for batch in batch_list:
                         logging.info(f"Batch {i}: {batch.shape[0]} records")
+                        session = session_local()
                         try:
                             push_to_postgres(batch.to_pandas(), engine, blob_name)
+                            session.commit()
                             logging.info(
                                 f"Uploaded batch: {i} to postgres sucessfully!"
                             )
                             postgres_count += 1
                         except Exception as e:
+                            session.rollback()
                             logging.error(
                                 f"Error uploading batch: {i} to postgres: {e}"
                             )
+                        finally:
+                            session.close()
                         total_records += batch.shape[0]
                         i += 1
                 logging.info(f"{total_records} records processed in {i - 1} batches")
