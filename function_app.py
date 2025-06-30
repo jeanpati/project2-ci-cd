@@ -3,11 +3,25 @@ import polars as pl
 import azure.functions as func
 import logging
 from azure.storage.blob import BlobServiceClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 import csv
 import tempfile
 import time
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
+
+def create_postgres_engine():
+    user = os.getenv('DATABASE_USER')
+    password = os.getenv('DATABASE_PASSWORD')
+    host = os.getenv('DATABASE_HOST')
+    port = os.getenv('DATABASE_PORT')
+    db = os.getenv('DATABASE_DB')
+
+    return f'postgresql://{user}:{password}@{host}:{port}/{db}'
+
+engine = create_engine(create_postgres_engine(), echo=True)
+session_local = sessionmaker(bind=engine)
 
 def get_blob_service_client():
     conn_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
@@ -67,7 +81,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Error fetching connection to Azure Blob Service Client: {e}")
 
     files_to_process = [
-        ("nppes_sample.csv")
+        ("npidata_pfile_20050523-20250413.csv")
     ]
 
     # No Batching
@@ -101,5 +115,3 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse("Failed", status_code=400)
     
     return func.HttpResponse("Success", status_code=200) 
-
-    
