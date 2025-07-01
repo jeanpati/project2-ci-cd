@@ -3,12 +3,12 @@ import polars as pl
 import azure.functions as func
 import logging
 from azure.storage.blob import BlobServiceClient
-from sqlalchemy import create_engine, inspect, MetaData
+from sqlalchemy import create_engine, inspect, MetaData, text
 from sqlalchemy.orm import sessionmaker
 import csv
 import tempfile
 import time
-from io import BytesIO
+from io import BytesIO, StringIO
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -23,7 +23,7 @@ def create_postgres_engine():
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
 
 
-engine = create_engine(create_postgres_engine(), echo=True)
+engine = create_engine(create_postgres_engine(), echo=False)
 session_local = sessionmaker(bind=engine)
 
 
@@ -32,7 +32,7 @@ def get_blob_service_client():
     return BlobServiceClient.from_connection_string(conn_string)
 
 
-def download_parquet(blob_service_client, container_name, blob_name):
+def download_parquet_from_blob(blob_service_client, container_name, blob_name):
     try:
         start_time = time.perf_counter()
         blob_client = blob_service_client.get_blob_client(
@@ -40,19 +40,19 @@ def download_parquet(blob_service_client, container_name, blob_name):
         )
         stream = blob_client.download_blob()
         blob_data = stream.readall()
-        pl_df = pl.read_parquet(BytesIO(blob_data))
-        df = pl_df.to_pandas()
+        parquet_buffer = BytesIO(blob_data)
+        pl_df = pl.read_parquet(parquet_buffer)
 
         end_time = time.perf_counter()
         print(f"{end_time - start_time}s")
 
-        return df
+        return pl_df
 
     except Exception as e:
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
 
-def download_file_from_blob_batched(blob_service_client, container_name, blob_name):
+def download_csv_from_blob_batched(blob_service_client, container_name, blob_name):
     try:
         start_time = time.perf_counter()
         blob_client = blob_service_client.get_blob_client(
@@ -83,22 +83,44 @@ def download_file_from_blob_batched(blob_service_client, container_name, blob_na
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
 
+def generate_ddl_from_polars(df: pl.DataFrame, table_name: str):
+    type_mapping = {
+        pl.Utf8: "TEXT",
+        pl.Int64: "BIGINT",
+        pl.Int32: "INTEGER",
+        pl.Float64: "DOUBLE PRECISION",
+        pl.Boolean: "BOOLEAN",
+        pl.Datetime: "TIMESTAMP",
+    }
+    ddl = f"CREATE TABLE IF NOT EXISTS {table_name} (\n"
+    for name, dtype in df.schema.items():
+        sql_type = type_mapping.get(dtype, "TEXT")
+        # Quote column names to handle spaces and special characters
+        ddl += f'  "{name}" {sql_type},\n'
+    ddl = ddl.rstrip(",\n") + "\n);"
+    return ddl
+
+
 def push_to_postgres(dataframe, engine, blob_name):
-    table_name = str(f"{blob_name}").replace(".csv", "")
+    table_name = str(f"{blob_name}").replace(".csv", "").replace(".parquet", "")
     insp = inspect(engine)
     db_tables = insp.get_table_names()
     if table_name not in db_tables:
-        dataframe.head(0).to_sql(
-            name=table_name, con=engine, if_exists="replace", index=False
-        )
-    with engine.begin() as conn:
-        dataframe.to_sql(
-            name=table_name,
-            con=conn,
-            if_exists="append",
-            index=False,
-            chunksize=20000,
-        )
+        # dataframe.head(0).to_sql(
+        #     name=table_name, con=engine, if_exists="replace", index=False
+        # )
+        ddl = generate_ddl_from_polars(dataframe, table_name)
+        with engine.connect() as conn:
+            conn.execute(text(ddl))
+            conn.commit()
+
+    with engine.raw_connection() as conn:
+        with conn.cursor() as cursor:
+            csv_output = dataframe.write_csv()
+            cursor.copy_expert(
+                f"COPY {table_name} FROM STDIN WITH CSV", StringIO(csv_output)
+            )
+            conn.commit()
 
 
 @app.route(route="http_trigger")
@@ -118,7 +140,9 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info(
                     f'Attempting to download "{blob_name}" from container "{container_name}"...'
                 )
-                df = download_parquet(blob_service_client, container_name, blob_name)
+                df = download_parquet_from_blob(
+                    blob_service_client, container_name, blob_name
+                )
                 if df is not None:
                     push_to_postgres(df, engine, blob_name)
                     logging.info(f"Uploaded {blob_name} to Postgres successfully!")
@@ -126,7 +150,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                 logging.info(
                     f'Attempting to download "{blob_name}" from container "{container_name}"...'
                 )
-                batches = download_file_from_blob_batched(
+                batches = download_csv_from_blob_batched(
                     blob_service_client, container_name, blob_name
                 )
                 logging.info(f"Beginning batch processing...")
@@ -141,7 +165,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                         for batch in batch_list:
                             logging.info(f"Batch {i}: {batch.shape[0]} records")
                             try:
-                                push_to_postgres(batch.to_pandas(), engine, blob_name)
+                                push_to_postgres(batch, engine, blob_name)
                                 logging.info(
                                     f"Uploaded batch: {i} to postgres sucessfully!"
                                 )
