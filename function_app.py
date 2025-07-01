@@ -46,16 +46,16 @@ def download_file_from_blob_batched(blob_service_client, container_name, blob_na
                 tmp.name,
                 encoding="utf8",
                 truncate_ragged_lines=False,
-                batch_size=100000,
+                batch_size=1000,
                 schema_overrides=schema,
             )
         return batches
     except Exception as e:
         print(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
    
-def copy_to_postgres(dataframe, engine, table_name):
+def copy_to_postgres(polars_df, engine, table_name):
     buffer = io.StringIO()
-    dataframe.to_csv(buffer, index=False, header=False)
+    polars_df.write_csv(buffer, include_header=False)
     buffer.seek(0)
     with engine.begin() as conn:
         raw_conn = conn.connection
@@ -83,29 +83,34 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     try:
         for blob_name in files_to_process:
             logging.info(f'Attempting to download "{blob_name}" from container "{container_name}"...\n')
-            start_time = time.perf_counter()
+            start_time_batching = time.perf_counter()
             batches = download_file_from_blob_batched(
                 blob_service_client, container_name, blob_name
             )
-            end_time = time.perf_counter()
+            end_time_batching = time.perf_counter()
             table_name = blob_name.replace("-","_").replace(".csv", "")
-            logging.info(f"Downloaded and batched in {end_time - start_time}s\n")
             logging.info(f"Beginning batch processing...")
             if batches is not None:
-                start_time = time.perf_counter()
+                start_time_copying = time.perf_counter()
+
                 i = 1
                 total_records = 0
                 postgres_count = 0
+                width = 50
+                fixed_offset = 25
                 while True:
                     batch_list = batches.next_batches(1)
                     if not batch_list:
                         break
-                    for batch in batch_list:
-                        logging.info(f"Batch {i}: {batch.shape[0]} records")
-                        polars_df = batch.to_pandas()
+                    for polars_df in batch_list:
+                        pos = i % (2 * width)
+                        if pos >= width:
+                            pos = 2 * width - pos
+                        zigzag = " " * fixed_offset + " " * pos + "˚∆˚"
+                        logging.info(f"Batch {i}: {polars_df.shape[0]} records {zigzag}")
                         try:
                             if i == 1:
-                                polars_df.head(0).to_sql(
+                                polars_df.to_pandas().head(0).to_sql(
                                     name=table_name, con=engine, if_exists="replace", index=False
                                 )
                                 copy_to_postgres(polars_df, engine, table_name)
@@ -119,20 +124,22 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                                     f"Uploaded batch: {i} to postgres sucessfully!"
                                 )
                                 postgres_count += 1
+
                         except Exception as e:
                             return func.HttpResponse(
                                 f"Error copying batch: {i} to postgres: {e}",
                                 status_code=400
                             )
-                        total_records += batch.shape[0]
+                        total_records += polars_df.shape[0]
                         i += 1
-
                         del polars_df
-                        del batch
-                end_time = time.perf_counter()                        
-                logging.info(f"{total_records} records copied in {i - 1} batches")
-                logging.info(f"{postgres_count} batches copied to Postgres")
-                logging.info(f"Uploaded to postgres in {end_time - start_time}s\n")
+
+                end_time_copying = time.perf_counter()                        
+                logging.info(f"""Summary:\n
+                            Records: {total_records}\n
+                            Batches: {i - 1}\n
+                            Download & Batching: {(end_time_batching - start_time_batching)/60} min\n
+                            Copying to Postgres: {(end_time_copying - start_time_copying)/60} min\n""")
     except Exception as e:
         logging.error(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
         return func.HttpResponse("Failed", status_code=400)
