@@ -23,8 +23,6 @@ def create_postgres_engine():
 
 
 engine = create_engine(create_postgres_engine(), echo=True)
-metadata_obj = MetaData()
-metadata_obj.reflect(bind=engine)
 session_local = sessionmaker(bind=engine)
 
 
