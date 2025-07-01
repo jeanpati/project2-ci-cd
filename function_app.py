@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 import csv
 import tempfile
 import time
+from io import BytesIO
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -31,6 +32,26 @@ def get_blob_service_client():
     return BlobServiceClient.from_connection_string(conn_string)
 
 
+def download_parquet(blob_service_client, container_name, blob_name):
+    try:
+        start_time = time.perf_counter()
+        blob_client = blob_service_client.get_blob_client(
+            container=container_name, blob=blob_name
+        )
+        stream = blob_client.download_blob()
+        blob_data = stream.readall()
+        pl_df = pl.read_parquet(BytesIO(blob_data))
+        df = pl_df.to_pandas()
+
+        end_time = time.perf_counter()
+        print(f"{end_time - start_time}s")
+
+        return df
+
+    except Exception as e:
+        print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
+
+
 def download_file_from_blob_batched(blob_service_client, container_name, blob_name):
     try:
         start_time = time.perf_counter()
@@ -52,7 +73,7 @@ def download_file_from_blob_batched(blob_service_client, container_name, blob_na
                 tmp.name,
                 encoding="utf8",
                 truncate_ragged_lines=False,
-                batch_size=10000,
+                batch_size=20000,
                 schema_overrides=schema,
             )
         end_time = time.perf_counter()
@@ -76,8 +97,7 @@ def push_to_postgres(dataframe, engine, blob_name):
             con=conn,
             if_exists="append",
             index=False,
-            chunksize=10000,
-            method="multi",
+            chunksize=20000,
         )
 
 
@@ -90,41 +110,52 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error(f"Error fetching connection to Azure Blob Service Client: {e}")
 
-    files_to_process = ["nppes_sample.csv"]
+    files_to_process = ["nppes_raw.parquet"]
 
     try:
         for blob_name in files_to_process:
-            logging.info(
-                f'Attempting to download "{blob_name}" from container "{container_name}"...'
-            )
-            batches = download_file_from_blob_batched(
-                blob_service_client, container_name, blob_name
-            )
-            logging.info(f"Beginning batch processing...")
-            if batches is not None:
-                i = 1
-                total_records = 0
-                postgres_count = 0
-                while True:
-                    batch_list = batches.next_batches(1)
-                    if not batch_list:
-                        break
-                    for batch in batch_list:
-                        logging.info(f"Batch {i}: {batch.shape[0]} records")
-                        try:
-                            push_to_postgres(batch.to_pandas(), engine, blob_name)
-                            logging.info(
-                                f"Uploaded batch: {i} to postgres sucessfully!"
-                            )
-                            postgres_count += 1
-                        except Exception as e:
-                            logging.error(
-                                f"Error uploading batch: {i} to postgres: {e}"
-                            )
-                        total_records += batch.shape[0]
-                        i += 1
-                logging.info(f"{total_records} records processed in {i - 1} batches")
-                logging.info(f"{postgres_count} batches uploaded to Postgres")
+            if blob_name.endswith(".parquet"):
+                logging.info(
+                    f'Attempting to download "{blob_name}" from container "{container_name}"...'
+                )
+                df = download_parquet(blob_service_client, container_name, blob_name)
+                if df is not None:
+                    push_to_postgres(df, engine, blob_name)
+                    logging.info(f"Uploaded {blob_name} to Postgres successfully!")
+            elif blob_name.endswith(".csv"):
+                logging.info(
+                    f'Attempting to download "{blob_name}" from container "{container_name}"...'
+                )
+                batches = download_file_from_blob_batched(
+                    blob_service_client, container_name, blob_name
+                )
+                logging.info(f"Beginning batch processing...")
+                if batches is not None:
+                    i = 1
+                    total_records = 0
+                    postgres_count = 0
+                    while True:
+                        batch_list = batches.next_batches(1)
+                        if not batch_list:
+                            break
+                        for batch in batch_list:
+                            logging.info(f"Batch {i}: {batch.shape[0]} records")
+                            try:
+                                push_to_postgres(batch.to_pandas(), engine, blob_name)
+                                logging.info(
+                                    f"Uploaded batch: {i} to postgres sucessfully!"
+                                )
+                                postgres_count += 1
+                            except Exception as e:
+                                logging.error(
+                                    f"Error uploading batch: {i} to postgres: {e}"
+                                )
+                            total_records += batch.shape[0]
+                            i += 1
+                    logging.info(
+                        f"{total_records} records processed in {i - 1} batches"
+                    )
+                    logging.info(f"{postgres_count} batches uploaded to Postgres")
     except Exception as e:
         logging.error(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
         return func.HttpResponse("Failed", status_code=400)
