@@ -71,7 +71,7 @@ def download_csv_from_blob_batched(blob_service_client, container_name, blob_nam
                 tmp.name,
                 encoding="utf8",
                 truncate_ragged_lines=False,
-                batch_size=1000,
+                batch_size=5000,
                 schema_overrides=schema,
             )
         return batches
@@ -97,22 +97,15 @@ def generate_ddl_from_polars(df: pl.DataFrame, table_name: str):
     return ddl
 
 
-def push_to_postgres(dataframe, engine, blob_name):
-    table_name = str(f"{blob_name}").replace(".csv", "").replace(".parquet", "")
+def copy_to_postgres(polars_df, engine, table_name):
     insp = inspect(engine)
     db_tables = insp.get_table_names()
     if table_name not in db_tables:
-        ddl = generate_ddl_from_polars(dataframe, table_name)
+        ddl = generate_ddl_from_polars(polars_df, table_name)
         with engine.connect() as conn:
             conn.execute(text(ddl))
             conn.commit()
 
-    csv_output = dataframe.write_csv()
-
-    print(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
-
-
-def copy_to_postgres(polars_df, engine, table_name):
     buffer = io.StringIO()
     polars_df.write_csv(buffer, include_header=False)
     buffer.seek(0)
@@ -131,86 +124,91 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     logging.getLogger("azure.storage").setLevel(logging.WARNING)
 
     files_to_process = ["npidata_pfile_20050523-20250413.csv"]
+    # nppes_raw.parquet
+    # nppes_sample.csv
+    # npidata_pfile_20050523-20250413.csv
 
     try:
         logging.info("Connecting to Azure Blob Service Client...")
         blob_service_client = get_blob_service_client()
         container_name = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
     except Exception as e:
-        return func.HttpResponse(
-            f"Error fetching connection to Azure Blob Service Client: {e}",
-            response_code=400,
-        )
+        logging.error(f"Error fetching connection to Azure Blob Service Client: {e}")
 
     try:
         for blob_name in files_to_process:
-            logging.info(
-                f'Attempting to download "{blob_name}" from container "{container_name}"...\n'
-            )
-            start_time_batching = time.perf_counter()
-            batches = download_file_from_blob_batched(
-                blob_service_client, container_name, blob_name
-            )
-            end_time_batching = time.perf_counter()
-            table_name = blob_name.replace("-", "_").replace(".csv", "")
-            logging.info(f"Beginning batch processing...")
-            if batches is not None:
-                start_time_copying = time.perf_counter()
-
-                i = 1
-                total_records = 0
-                postgres_count = 0
-                width = 50
-                fixed_offset = 25
-                while True:
-                    batch_list = batches.next_batches(1)
-                    if not batch_list:
-                        break
-                    for polars_df in batch_list:
-                        pos = i % (2 * width)
-                        if pos >= width:
-                            pos = 2 * width - pos
-                        zigzag = " " * fixed_offset + " " * pos + "˚∆˚"
-                        logging.info(
-                            f"Batch {i}: {polars_df.shape[0]} records {zigzag}"
-                        )
-                        try:
-                            if i == 1:
-                                polars_df.to_pandas().head(0).to_sql(
-                                    name=table_name,
-                                    con=engine,
-                                    if_exists="replace",
-                                    index=False,
-                                )
-                                copy_to_postgres(polars_df, engine, table_name)
-                                logging.info(
-                                    f"Uploaded batch: {i} to postgres with headers sucessfully!"
-                                )
-                                postgres_count += 1
-                            else:
-                                copy_to_postgres(polars_df, engine, table_name)
-                                logging.info(
-                                    f"Uploaded batch: {i} to postgres sucessfully!"
-                                )
-                                postgres_count += 1
-
-                        except Exception as e:
-                            return func.HttpResponse(
-                                f"Error copying batch: {i} to postgres: {e}",
-                                status_code=400,
-                            )
-                        total_records += polars_df.shape[0]
-                        i += 1
-                        del polars_df
-
-                end_time_copying = time.perf_counter()
+            table_name = str(f"{blob_name}").replace(".csv", "").replace(".parquet", "")
+            if blob_name.endswith(".parquet"):
                 logging.info(
-                    f"""Summary:\n
-                            Records: {total_records}\n
-                            Batches: {i - 1}\n
-                            Download & Batching: {(end_time_batching - start_time_batching)/60} min\n
-                            Copying to Postgres: {(end_time_copying - start_time_copying)/60} min\n"""
+                    f'Attempting to download "{blob_name}" from container "{container_name}"...'
                 )
+                polars_df = download_parquet_from_blob(
+                    blob_service_client, container_name, blob_name
+                )
+                if polars_df is not None:
+                    copy_to_postgres(polars_df, engine, table_name)
+                    logging.info(f"Uploaded {blob_name} to Postgres successfully!")
+            elif blob_name.endswith(".csv"):
+                logging.info(
+                    f'Attempting to download "{blob_name}" from container "{container_name}"...\n'
+                )
+                start_time_batching = time.perf_counter()
+                batches = download_csv_from_blob_batched(
+                    blob_service_client, container_name, blob_name
+                )
+                end_time_batching = time.perf_counter()
+
+                logging.info(f"Beginning batch processing...")
+                if batches is not None:
+                    start_time_copying = time.perf_counter()
+                    i = 1
+                    total_records = 0
+                    postgres_count = 0
+                    width = 50
+                    fixed_offset = 25
+                    while True:
+                        batch_list = batches.next_batches(1)
+                        if not batch_list:
+                            break
+                        for polars_df in batch_list:
+                            pos = i % (2 * width)
+                            if pos >= width:
+                                pos = 2 * width - pos
+                            zigzag = " " * fixed_offset + " " * pos + "˚∆˚"
+                            logging.info(
+                                f"Batch {i}: {polars_df.shape[0]} records {zigzag}"
+                            )
+                            try:
+                                if i == 1:
+                                    copy_to_postgres(polars_df, engine, table_name)
+                                    logging.info(
+                                        f"Uploaded batch: {i} to postgres with headers sucessfully!"
+                                    )
+                                    postgres_count += 1
+                                else:
+                                    copy_to_postgres(polars_df, engine, table_name)
+                                    logging.info(
+                                        f"Uploaded batch: {i} to postgres sucessfully!"
+                                    )
+                                    postgres_count += 1
+
+                            except Exception as e:
+                                return func.HttpResponse(
+                                    f"Error copying batch: {i} to postgres: {e}",
+                                    status_code=400,
+                                )
+                            total_records += polars_df.shape[0]
+                            i += 1
+                            del polars_df
+
+                    end_time_copying = time.perf_counter()
+                    logging.info(
+                        f"""Summary:\n
+                                Records: {total_records}\n
+                                Batches: {i - 1}\n
+                                Download & Batching: {(end_time_batching - start_time_batching)/60} min\n
+                                Copying to Postgres: {(end_time_copying - start_time_copying)/60} min\n"""
+                    )
     except Exception as e:
         logging.error(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
         return func.HttpResponse("Failed", status_code=400)
