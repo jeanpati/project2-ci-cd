@@ -4,12 +4,14 @@ import polars as pl
 import azure.functions as func
 import logging
 from azure.storage.blob import BlobServiceClient
-from sqlalchemy import create_engine, inspect, MetaData, text
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 import csv
 import tempfile
 import time
 from io import BytesIO, StringIO
+import pyarrow.parquet as pq
+
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -42,13 +44,13 @@ def download_parquet_from_blob(blob_service_client, container_name, blob_name):
         stream = blob_client.download_blob()
         blob_data = stream.readall()
         parquet_buffer = BytesIO(blob_data)
-        pl_df = pl.read_parquet(parquet_buffer)
-
+        parquet_file = pq.ParquetFile(parquet_buffer)
+        for i in range(parquet_file.num_row_groups):
+            table = parquet_file.read_row_group(i)
+            pl_df = pl.from_arrow(table)
+            yield pl_df
         end_time = time.perf_counter()
         print(f"{end_time - start_time}s")
-
-        return pl_df
-
     except Exception as e:
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
@@ -123,7 +125,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     )
     logging.getLogger("azure.storage").setLevel(logging.WARNING)
 
-    files_to_process = ["npidata_pfile_20050523-20250413.csv"]
+    files_to_process = ["nppes_raw.parquet"]
     # nppes_raw.parquet
     # nppes_sample.csv
     # npidata_pfile_20050523-20250413.csv
@@ -137,17 +139,40 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         for blob_name in files_to_process:
-            table_name = str(f"{blob_name}").replace(".csv", "").replace(".parquet", "")
+            table_name = (
+                str(f"{blob_name}")
+                .replace("-", "_")
+                .replace(".csv", "")
+                .replace(".parquet", "")
+            )
             if blob_name.endswith(".parquet"):
                 logging.info(
                     f'Attempting to download "{blob_name}" from container "{container_name}"...'
                 )
-                polars_df = download_parquet_from_blob(
+                overall_start = time.perf_counter()
+                parquet_download_start = time.perf_counter()
+                parquet_batches = download_parquet_from_blob(
                     blob_service_client, container_name, blob_name
                 )
-                if polars_df is not None:
-                    copy_to_postgres(polars_df, engine, table_name)
-                    logging.info(f"Uploaded {blob_name} to Postgres successfully!")
+                parquet_download_end = time.perf_counter()
+                logging.info(
+                    f"Total download time: {parquet_download_end - parquet_download_start:.2f} seconds"
+                )
+                batch_num = 1
+                batch_times = []
+                for pl_df in parquet_batches:
+                    batch_start = time.perf_counter()
+                    copy_to_postgres(pl_df, engine, table_name)
+                    batch_end = time.perf_counter()
+                    batch_times.append(batch_end - batch_start)
+                    logging.info(
+                        f"Batch {batch_num} start: {batch_start:.2f} end: {batch_end:.2f} duration: {batch_end - batch_start:.2f} seconds"
+                    )
+                    batch_num += 1
+                overall_end = time.perf_counter()
+                logging.info(
+                    f"Total overall time: {overall_end - overall_start:.2f} seconds"
+                )
             elif blob_name.endswith(".csv"):
                 logging.info(
                     f'Attempting to download "{blob_name}" from container "{container_name}"...\n'
