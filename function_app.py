@@ -106,21 +106,19 @@ def push_to_postgres(dataframe, engine, blob_name):
     insp = inspect(engine)
     db_tables = insp.get_table_names()
     if table_name not in db_tables:
-        # dataframe.head(0).to_sql(
-        #     name=table_name, con=engine, if_exists="replace", index=False
-        # )
         ddl = generate_ddl_from_polars(dataframe, table_name)
         with engine.connect() as conn:
             conn.execute(text(ddl))
             conn.commit()
 
-    with engine.raw_connection() as conn:
-        with conn.cursor() as cursor:
-            csv_output = dataframe.write_csv()
-            cursor.copy_expert(
+    csv_output = dataframe.write_csv()
+
+    with engine.begin() as conn:
+        raw_conn = conn.connection
+        with raw_conn.cursor() as cur:
+            cur.copy_expert(
                 f"COPY {table_name} FROM STDIN WITH CSV", StringIO(csv_output)
             )
-            conn.commit()
 
 
 @app.route(route="http_trigger")
