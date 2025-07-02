@@ -9,12 +9,11 @@ from sqlalchemy.orm import sessionmaker
 import csv
 import tempfile
 import time
-from io import BytesIO, StringIO
+from io import BytesIO
 import pyarrow.parquet as pq
 
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
-
 
 def create_postgres_engine():
     user = os.getenv("DATABASE_USER")
@@ -37,7 +36,6 @@ def get_blob_service_client():
 
 def download_parquet_from_blob(blob_service_client, container_name, blob_name):
     try:
-        start_time = time.perf_counter()
         blob_client = blob_service_client.get_blob_client(
             container=container_name, blob=blob_name
         )
@@ -49,8 +47,6 @@ def download_parquet_from_blob(blob_service_client, container_name, blob_name):
             table = parquet_file.read_row_group(i)
             pl_df = pl.from_arrow(table)
             yield pl_df
-        end_time = time.perf_counter()
-        print(f"{end_time - start_time}s")
     except Exception as e:
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
@@ -73,7 +69,7 @@ def download_csv_from_blob_batched(blob_service_client, container_name, blob_nam
                 tmp.name,
                 encoding="utf8",
                 truncate_ragged_lines=False,
-                batch_size=5000,
+                batch_size=1000,
                 schema_overrides=schema,
             )
         return batches
@@ -116,19 +112,79 @@ def copy_to_postgres(polars_df, engine, table_name):
         with raw_conn.cursor() as cur:
             cur.copy_expert(f"COPY {table_name} FROM STDIN WITH CSV", buffer)
 
+def process_parquet(blob_service_client, container_name, blob_name, engine, table_name):
+    logging.info(f'Attempting to download "{blob_name}" from container "{container_name}"...')
+    parquet_download_start = time.perf_counter()
+    parquet_batches = download_parquet_from_blob(blob_service_client, container_name, blob_name)
+    parquet_download_end = time.perf_counter()
+    logging.info(f"Total download time: {parquet_download_end - parquet_download_start:.2f}s")
+    if parquet_batches is not None:
+        parquet_copy_total_start = time.perf_counter()
+        batch_num = 1
+        total_records = 0
+        for pl_df in parquet_batches:
+            parquet_copy_start = time.perf_counter()
+            copy_to_postgres(pl_df, engine, table_name)
+            parquet_copy_end = time.perf_counter()
+            logging.info(
+                f"Batch {batch_num}: Records: {pl_df.shape[0]} Duration: {parquet_copy_end - parquet_copy_start:.2f}s"
+            )
+            batch_num += 1
+            total_records += pl_df.shape[0]
+        parquet_copy_total_end = time.perf_counter()
+        return {
+            "file": blob_name,
+            "records": total_records,
+            "batches": batch_num - 1,
+            "download_time": parquet_download_end - parquet_download_start,
+            "copy_time": parquet_copy_total_end - parquet_copy_total_start,
+        }
+
+def process_csv(blob_service_client, container_name, blob_name, engine, table_name):
+    logging.info(f'Attempting to download "{blob_name}" from container "{container_name}"...')
+    csv_download_start = time.perf_counter()
+    csv_batches = download_csv_from_blob_batched(blob_service_client, container_name, blob_name)
+    csv_download_end = time.perf_counter()
+    logging.info(f"Total download time: {csv_download_end - csv_download_start:.2f}s")
+    if csv_batches is not None:
+        csv_copy_total_start = time.perf_counter()       
+        batch_num = 1
+        total_records = 0
+        while True:
+            csv_batch_list = csv_batches.next_batches(1)
+            if not csv_batch_list:
+                break
+            for pl_df in csv_batch_list:
+                csv_copy_start = time.perf_counter()
+                copy_to_postgres(pl_df, engine, table_name)
+                csv_copy_end = time.perf_counter()
+                logging.info(
+                    f"Batch {batch_num}: Records: {pl_df.shape[0]} Duration: {csv_copy_end - csv_copy_start:.2f}s"
+                )            
+                batch_num += 1
+                total_records += pl_df.shape[0]
+                del pl_df
+        csv_copy_total_end = time.perf_counter()        
+        return {
+            "file": blob_name,
+            "records": total_records,
+            "batches": batch_num - 1,
+            "download_time": csv_download_end - csv_download_start,
+            "copy_time": csv_copy_total_end - csv_copy_total_start,
+        }
+
 
 @app.route(route="http_trigger")
 def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
-    # Mutes azure function logs
-    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(
-        logging.WARNING
-    )
+    logging.getLogger("azure.core.pipeline.policies.http_logging_policy").setLevel(logging.WARNING)
     logging.getLogger("azure.storage").setLevel(logging.WARNING)
 
-    files_to_process = ["nppes_raw.parquet"]
-    # nppes_raw.parquet
-    # nppes_sample.csv
-    # npidata_pfile_20050523-20250413.csv
+    overall_start = time.perf_counter()
+
+    files_to_process = [
+        "nppes_raw.parquet",
+        "nppes_sample.csv"
+    ]
 
     try:
         logging.info("Connecting to Azure Blob Service Client...")
@@ -136,9 +192,10 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
         container_name = os.getenv("AZURE_STORAGE_CONTAINER_NAME")
     except Exception as e:
         logging.error(f"Error fetching connection to Azure Blob Service Client: {e}")
+        return func.HttpResponse("Failed", status_code=400)
 
     try:
-        for blob_name in files_to_process:
+        for blob_name in files_to_process:           
             table_name = (
                 str(f"{blob_name}")
                 .replace("-", "_")
@@ -146,96 +203,14 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                 .replace(".parquet", "")
             )
             if blob_name.endswith(".parquet"):
-                logging.info(
-                    f'Attempting to download "{blob_name}" from container "{container_name}"...'
-                )
-                overall_start = time.perf_counter()
-                parquet_download_start = time.perf_counter()
-                parquet_batches = download_parquet_from_blob(
-                    blob_service_client, container_name, blob_name
-                )
-                parquet_download_end = time.perf_counter()
-                logging.info(
-                    f"Total download time: {parquet_download_end - parquet_download_start:.2f} seconds"
-                )
-                batch_num = 1
-                batch_times = []
-                for pl_df in parquet_batches:
-                    batch_start = time.perf_counter()
-                    copy_to_postgres(pl_df, engine, table_name)
-                    batch_end = time.perf_counter()
-                    batch_times.append(batch_end - batch_start)
-                    logging.info(
-                        f"Batch {batch_num} start: {batch_start:.2f} end: {batch_end:.2f} duration: {batch_end - batch_start:.2f} seconds"
-                    )
-                    batch_num += 1
-                overall_end = time.perf_counter()
-                logging.info(
-                    f"Total overall time: {overall_end - overall_start:.2f} seconds"
-                )
+                process_parquet(blob_service_client, container_name, blob_name, engine, table_name)
             elif blob_name.endswith(".csv"):
-                logging.info(
-                    f'Attempting to download "{blob_name}" from container "{container_name}"...\n'
-                )
-                start_time_batching = time.perf_counter()
-                batches = download_csv_from_blob_batched(
-                    blob_service_client, container_name, blob_name
-                )
-                end_time_batching = time.perf_counter()
-
-                logging.info(f"Beginning batch processing...")
-                if batches is not None:
-                    start_time_copying = time.perf_counter()
-                    i = 1
-                    total_records = 0
-                    postgres_count = 0
-                    width = 50
-                    fixed_offset = 25
-                    while True:
-                        batch_list = batches.next_batches(1)
-                        if not batch_list:
-                            break
-                        for polars_df in batch_list:
-                            pos = i % (2 * width)
-                            if pos >= width:
-                                pos = 2 * width - pos
-                            zigzag = " " * fixed_offset + " " * pos + "˚∆˚"
-                            logging.info(
-                                f"Batch {i}: {polars_df.shape[0]} records {zigzag}"
-                            )
-                            try:
-                                if i == 1:
-                                    copy_to_postgres(polars_df, engine, table_name)
-                                    logging.info(
-                                        f"Uploaded batch: {i} to postgres with headers sucessfully!"
-                                    )
-                                    postgres_count += 1
-                                else:
-                                    copy_to_postgres(polars_df, engine, table_name)
-                                    logging.info(
-                                        f"Uploaded batch: {i} to postgres sucessfully!"
-                                    )
-                                    postgres_count += 1
-
-                            except Exception as e:
-                                return func.HttpResponse(
-                                    f"Error copying batch: {i} to postgres: {e}",
-                                    status_code=400,
-                                )
-                            total_records += polars_df.shape[0]
-                            i += 1
-                            del polars_df
-
-                    end_time_copying = time.perf_counter()
-                    logging.info(
-                        f"""Summary:\n
-                                Records: {total_records}\n
-                                Batches: {i - 1}\n
-                                Download & Batching: {(end_time_batching - start_time_batching)/60} min\n
-                                Copying to Postgres: {(end_time_copying - start_time_copying)/60} min\n"""
-                    )
+                process_csv(blob_service_client, container_name, blob_name, engine, table_name)
     except Exception as e:
-        logging.error(f"Error downloading {blob_name} from Azure Blob Storage: {e}")
+        logging.error(f"Error processing {blob_name}: {e}")
         return func.HttpResponse("Failed", status_code=400)
+    
+    overall_end = time.perf_counter()
+    logging.info(f"Total Function Time: {overall_end - overall_start:.2f}s")
 
     return func.HttpResponse("Success", status_code=200)
