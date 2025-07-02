@@ -6,7 +6,7 @@ import csv
 
 from postgres_utils import copy_to_postgres
 
-def batch_from_csv_file(csv_path, batch_size=200):
+def batch_from_csv_file(csv_path, batch_size=1000):
     with open(csv_path, "r", encoding="utf-8") as f:
         header = next(csv.reader([f.readline().strip()]))
     schema = {col: pl.Utf8 for col in header}
@@ -18,7 +18,7 @@ def batch_from_csv_file(csv_path, batch_size=200):
         schema_overrides=schema,
     )
 
-def download_csv_from_blob_batched(blob_service_client, container_name, blob_name, sheet_name):
+def download_csv_from_blob_batched(blob_service_client, container_name, blob_name):
     try:
         blob_client = blob_service_client.get_blob_client(
             container=container_name, blob=blob_name
@@ -30,8 +30,8 @@ def download_csv_from_blob_batched(blob_service_client, container_name, blob_nam
                 for chunk in stream.chunks():
                     tmp_xlsx.write(chunk)
                 tmp_xlsx.flush()
-                pl_df = pl.read_excel(tmp_xlsx.name)
-                pl_df.write_csv(tmp_csv.name)
+                sheet_one = pl.read_excel(tmp_xlsx.name, sheet_id=1)
+                sheet_one.write_csv(tmp_csv.name)
                 tmp_csv.flush()
                 return batch_from_csv_file(tmp_csv.name)
         else:

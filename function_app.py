@@ -6,7 +6,7 @@ import logging
 from sqlalchemy import create_engine
 import polars as pl
 
-from postgres_utils import create_postgres_engine, copy_to_postgres, call_procedures
+from postgres_utils import create_postgres_engine, copy_to_postgres, call_procedures, export_views_to_azure
 from parquet_utils import process_parquet
 from csv_utils import process_csv
 
@@ -25,10 +25,11 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     overall_start = time.perf_counter()
 
     files_to_process = [
+        # "nppes_raw.parquet",
         # "nucc_taxonomy_250.csv",
-        # "nppes_sample.csv",
+        # "nppes_sample.csv"
         # "ssa_fips_state_county_2025.csv",
-        "ZIP_COUNTY_032025.xlsx"
+        # "ZIP_COUNTY_032025.xlsx"
     ]
 
     try:
@@ -54,6 +55,7 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
                 .replace("-", "_")
                 .replace(".csv", "")
                 .replace(".parquet", "")
+                .replace(".xlsx", "")
             )
             table_names.append(table_name)
 
@@ -74,6 +76,16 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     # except Exception as e:
     #     return func.HttpResponse(f"Error excuting stored procedures: {e}")
 
+    # views_to_export = [
+    #     "run_summary_view"
+    # ]
+
+    # try:
+    #     logging.info("Exporting views to .csv...")
+    #     for view in views_to_export:
+    #         export_views_to_azure(blob_service_client, container_name, postgres_engine, view)
+    # except Exception as e:
+    #     return func.HttpResponse(f"Error exporting views to Azure Blob Storage: {e}")
     
     overall_end = time.perf_counter()
     logging.info(f"\nTotal Function Time: {overall_end - overall_start:.2f}s\n")
