@@ -1,8 +1,7 @@
 import os
 import polars as pl
+from sqlalchemy import inspect, text
 import io
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import sessionmaker
 
 def create_postgres_engine():
     user = os.getenv("DATABASE_USER")
@@ -12,9 +11,6 @@ def create_postgres_engine():
     db = os.getenv("DATABASE_DB")
 
     return f"postgresql://{user}:{password}@{host}:{port}/{db}"
-
-engine = create_engine(create_postgres_engine(), echo=False)
-session_local = sessionmaker(bind=engine)
 
 def generate_ddl_from_polars(df: pl.DataFrame, table_name: str):
     type_mapping = {

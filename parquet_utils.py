@@ -23,11 +23,10 @@ def download_parquet_from_blob(blob_service_client, container_name, blob_name):
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
 def process_parquet(blob_service_client, container_name, blob_name, engine, table_name):
-    logging.info(f'Attempting to download "{blob_name}" from container "{container_name}"...')
+    logging.info(f'\nAttempting to download "{blob_name}" from container "{container_name}"...')
     parquet_download_start = time.perf_counter()
     parquet_batches = download_parquet_from_blob(blob_service_client, container_name, blob_name)
     parquet_download_end = time.perf_counter()
-    logging.info(f"Total download time: {parquet_download_end - parquet_download_start:.2f}s")
     if parquet_batches is not None:
         parquet_copy_total_start = time.perf_counter()
         batch_num = 1

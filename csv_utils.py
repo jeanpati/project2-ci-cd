@@ -24,7 +24,7 @@ def download_csv_from_blob_batched(blob_service_client, container_name, blob_nam
                 tmp.name,
                 encoding="utf8",
                 truncate_ragged_lines=False,
-                batch_size=1000,
+                batch_size=200,
                 schema_overrides=schema,
             )
         return batches
@@ -32,11 +32,10 @@ def download_csv_from_blob_batched(blob_service_client, container_name, blob_nam
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
 def process_csv(blob_service_client, container_name, blob_name, engine, table_name):
-    logging.info(f'Attempting to download "{blob_name}" from container "{container_name}"...')
+    logging.info(f'\nAttempting to download "{blob_name}" from container "{container_name}"...')
     csv_download_start = time.perf_counter()
     csv_batches = download_csv_from_blob_batched(blob_service_client, container_name, blob_name)
     csv_download_end = time.perf_counter()
-    logging.info(f"Total download time: {csv_download_end - csv_download_start:.2f}s")
     if csv_batches is not None:
         csv_copy_total_start = time.perf_counter()       
         batch_num = 1
