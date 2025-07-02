@@ -6,28 +6,41 @@ import csv
 
 from postgres_utils import copy_to_postgres
 
-def download_csv_from_blob_batched(blob_service_client, container_name, blob_name):
+def batch_from_csv_file(csv_path, batch_size=200):
+    with open(csv_path, "r", encoding="utf-8") as f:
+        header = next(csv.reader([f.readline().strip()]))
+    schema = {col: pl.Utf8 for col in header}
+    return pl.read_csv_batched(
+        csv_path,
+        encoding="utf8",
+        truncate_ragged_lines=False,
+        batch_size=batch_size,
+        schema_overrides=schema,
+    )
+
+def download_csv_from_blob_batched(blob_service_client, container_name, blob_name, sheet_name):
     try:
         blob_client = blob_service_client.get_blob_client(
             container=container_name, blob=blob_name
         )
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".csv") as tmp:
-            stream = blob_client.download_blob()
-            for chunk in stream.chunks():
-                tmp.write(chunk)
-            tmp.flush()
-            tmp.seek(0)
-            header = next(csv.reader([tmp.readline().decode("utf-8").strip()]))
-            schema = {col: pl.Utf8 for col in header}
-            tmp.seek(0)
-            batches = pl.read_csv_batched(
-                tmp.name,
-                encoding="utf8",
-                truncate_ragged_lines=False,
-                batch_size=200,
-                schema_overrides=schema,
-            )
-        return batches
+        if blob_name.endswith(".xlsx"):
+            with tempfile.NamedTemporaryFile(delete=True, suffix=".xlsx") as tmp_xlsx, \
+                 tempfile.NamedTemporaryFile(delete=True, suffix=".csv") as tmp_csv:
+                stream = blob_client.download_blob()
+                for chunk in stream.chunks():
+                    tmp_xlsx.write(chunk)
+                tmp_xlsx.flush()
+                pl_df = pl.read_excel(tmp_xlsx.name)
+                pl_df.write_csv(tmp_csv.name)
+                tmp_csv.flush()
+                return batch_from_csv_file(tmp_csv.name)
+        else:
+            with tempfile.NamedTemporaryFile(delete=True, suffix=".csv") as tmp:
+                stream = blob_client.download_blob()
+                for chunk in stream.chunks():
+                    tmp.write(chunk)
+                tmp.flush()
+                return batch_from_csv_file(tmp.name)
     except Exception as e:
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 

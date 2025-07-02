@@ -45,3 +45,18 @@ def copy_to_postgres(polars_df, engine, table_name):
         raw_conn = conn.connection
         with raw_conn.cursor() as cur:
             cur.copy_expert(f"COPY {table_name} FROM STDIN WITH CSV", buffer)
+
+def call_procedures(engine, table_names):
+    procedure_list = []
+    for table_name in table_names:
+        procedure_list.append(f"CALL rename_columns_with_special_chars('{table_name}');")
+    # procedure_list.append(
+    #     "proc1();",
+    #     "proc2();"
+    # )
+    try:
+        with engine.begin() as conn:
+            for procedure in procedure_list:
+                conn.execute(text(procedure))
+    except Exception as e:
+        print(f"Error executing stored procedures: {e}")

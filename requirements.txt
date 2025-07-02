@@ -9,4 +9,5 @@ pandas
 openpyxl
 polars
 pyarrow
+fastexcel
 
