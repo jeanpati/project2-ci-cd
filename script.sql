@@ -1,3 +1,10 @@
+CREATE INDEX IF NOT EXISTS idx_nppes_raw_npi ON nppes_raw("NPI");
+CREATE INDEX IF NOT EXISTS idx_nucc_taxonomy_250_code ON nucc_taxonomy_250("Code");
+CREATE INDEX IF NOT EXISTS idx_zip ON zip_county_032025("ZIP");
+CREATE INDEX IF NOT EXISTS idx_nppes_zip ON nppes_raw("Provider Business Practice Location Address Postal Code");
+CREATE INDEX IF NOT EXISTS idx_county_zip ON zip_county_032025("COUNTY");
+CREATE INDEX IF NOT EXISTS idx_county_ssa ON ssa_fips_state_county_2025(fipscounty);
+
 CREATE OR REPLACE PROCEDURE create_nppes_csv(src_table_name TEXT)
 LANGUAGE plpgsql
 AS $$
@@ -5,6 +12,8 @@ DECLARE
     view_name TEXT := src_table_name || '_summary';
 BEGIN
     EXECUTE format($f$
+		DROP VIEW IF EXISTS %I;
+
         CREATE OR REPLACE VIEW %I AS
         WITH entity_names AS (
             SELECT 
@@ -23,6 +32,7 @@ BEGIN
         practice_addresses AS (
             SELECT 
                 "NPI",
+				"Provider Business Practice Location Address Postal Code" as zip_code,
                 CASE 
                 WHEN "Provider First Line Business Practice Location Address" IS NOT NULL 
                     THEN TRIM(CONCAT(
@@ -69,14 +79,15 @@ BEGIN
             tc."Taxonomy Code",
             nt."Grouping",
             nt."Classification",
-            nt."Specialization"
+            nt."Specialization",
+			left(pa.zip_code,5) as zip_code
         FROM %I np
         JOIN entity_names en ON en."NPI" = np."NPI"
         JOIN practice_addresses pa ON pa."NPI" = np."NPI"
         JOIN taxonomy_codes tc ON tc."NPI" = np."NPI"
         JOIN nucc_taxonomy_250 nt ON nt."Code" = tc."Taxonomy Code" AND tc."Taxonomy Code" IS NOT NULL;
     $f$,
-    view_name, src_table_name, src_table_name, src_table_name, src_table_name
+    view_name, view_name, src_table_name, src_table_name, src_table_name, src_table_name
     );
 END;
 $$;
@@ -86,3 +97,29 @@ $$;
 
 CALL create_nppes_csv('nppes_raw');
 CALL create_nppes_csv('nppes_sample');
+
+
+CREATE OR REPLACE PROCEDURE create_complete_nppes_table()
+LANGUAGE plpgsql
+AS $$
+BEGIN
+	DROP TABLE IF EXISTS nppes_complete;
+
+    CREATE TABLE nppes_complete AS
+		SELECT nr."NPI",
+			nr."Entity Type", 
+		    nr."Entity Name",
+		    nr."Practice Address",
+		    nr."Taxonomy Code",
+		    nr."Grouping",
+		    nr."Classification",
+		    nr."Specialization",
+		    nr.zip_code,
+		    sf.countyname_fips as county
+		FROM nppes_raw_summary nr
+		JOIN zip_county_032025 zc ON nr.zip_code = zc."ZIP"
+		JOIN ssa_fips_state_county_2025 sf ON sf.fipscounty = zc."COUNTY";
+END;
+$$;
+
+CALL create_complete_nppes_table();
