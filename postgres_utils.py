@@ -49,12 +49,12 @@ def copy_to_postgres(polars_df, engine, table_name):
 
 def call_procedures(engine, table_names):
     procedure_list = []
-    for table_name in table_names:
-        procedure_list.append(f"CALL rename_columns_with_special_chars('{table_name}');")
-    # procedure_list.append(
-    #     "proc1();",
-    #     "proc2();"
-    # )
+    # for table_name in table_names:
+    #     procedure_list.append(f"CALL rename_columns_with_special_chars('{table_name}');")
+    # make procedure fstring, and pass those in
+    procedure_list.append(
+        "CALL create_nppes_csv();",
+    )
     try:
         with engine.begin() as conn:
             for procedure in procedure_list:

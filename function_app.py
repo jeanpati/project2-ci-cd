@@ -70,22 +70,23 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         return func.HttpResponse(f"Error processing {blob_name}: {e}", status_code=400)
 
-    # try:
-    #     logging.info("Executing stored procedures...")
-    #     call_procedures(postgres_engine, table_names)
-    # except Exception as e:
-    #     return func.HttpResponse(f"Error excuting stored procedures: {e}")
+    try:
+        logging.info("Executing stored procedures...")
+        call_procedures(postgres_engine, table_names)
+    except Exception as e:
+        return func.HttpResponse(f"Error excuting stored procedures: {e}")
 
-    # views_to_export = [
-    #     "run_summary_view"
-    # ]
+    views_to_export = [
+        "nppes_raw_summary",
+        "nppes_sample_summary"
+    ]
 
-    # try:
-    #     logging.info("Exporting views to .csv...")
-    #     for view in views_to_export:
-    #         export_views_to_azure(blob_service_client, container_name, postgres_engine, view)
-    # except Exception as e:
-    #     return func.HttpResponse(f"Error exporting views to Azure Blob Storage: {e}")
+    try:
+        logging.info("Exporting views to .csv...")
+        for view in views_to_export:
+            export_views_to_azure(blob_service_client, container_name, postgres_engine, view)
+    except Exception as e:
+        return func.HttpResponse(f"Error exporting views to Azure Blob Storage: {e}")
     
     overall_end = time.perf_counter()
     logging.info(f"\nTotal Function Time: {overall_end - overall_start:.2f}s\n")
