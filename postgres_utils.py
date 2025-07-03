@@ -53,7 +53,8 @@ def call_procedures(engine, table_names):
     #     procedure_list.append(f"CALL rename_columns_with_special_chars('{table_name}');")
     # make procedure fstring, and pass those in
     procedure_list.append(
-        "CALL create_nppes_csv();",
+        "CALL create_nppes_csv('nppes_sample');",
+        "CALL create_nppes_csv('nppes_raw');",
     )
     try:
         with engine.begin() as conn:
