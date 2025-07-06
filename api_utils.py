@@ -1,8 +1,9 @@
 import requests
-import json
 import polars as pl
 import logging
 import time
+from datetime import datetime
+
 
 from postgres_utils import copy_to_postgres
 
@@ -27,7 +28,8 @@ def process_json(url, engine, table_name):
         "file": url,
         "records": total_records,
         "batches": 1,
-        "download_time": json_download_end - json_download_start,
-        "copy_time": json_copy_total_end - json_copy_total_start,
+        "download_time": float(json_download_end - json_download_start),
+        "copy_time": float(json_copy_total_end - json_copy_total_start),
+        "timestamp": datetime.now().isoformat(),
     }
         

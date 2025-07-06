@@ -3,6 +3,7 @@ import tempfile
 import time
 import logging
 import csv
+from datetime import datetime
 
 from postgres_utils import copy_to_postgres
 
@@ -72,6 +73,7 @@ def process_csv(blob_service_client, container_name, blob_name, engine, table_na
             "file": blob_name,
             "records": total_records,
             "batches": batch_num - 1,
-            "download_time": csv_download_end - csv_download_start,
-            "copy_time": csv_copy_total_end - csv_copy_total_start,
+            "download_time": float(csv_download_end - csv_download_start),
+            "copy_time": float(csv_copy_total_end - csv_copy_total_start),
+            "timestamp": datetime.now().isoformat(),
         }

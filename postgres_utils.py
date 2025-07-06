@@ -3,6 +3,7 @@ import polars as pl
 from sqlalchemy import inspect, text
 import io
 import csv
+import logging
 
 def create_postgres_engine():
     user = os.getenv("DATABASE_USER")
@@ -48,20 +49,44 @@ def copy_to_postgres(polars_df, engine, table_name):
             cur.copy_expert(f"COPY {table_name} FROM STDIN WITH CSV", buffer)
 
 def call_procedures(engine, table_names):
-    procedure_list = []
-    # for table_name in table_names:
-    #     procedure_list.append(f"CALL rename_columns_with_special_chars('{table_name}');")
-    # make procedure fstring, and pass those in
-    procedure_list.append(
+    cleaning_procedures = []
+    for table_name in table_names:
+        cleaning_procedures.append(f"CALL rename_columns_with_special_chars('{table_name}');")
+    try:
+        for procedure in cleaning_procedures:
+            logging.info(f"Executing: '{procedure}'...")
+            with engine.begin() as conn:
+                conn.execution_options(autocommit=True).execute(text(procedure))
+    except Exception as e:
+        print(f"Error executing '{procedure}': {e}")
+        return
+
+    summary_view_procedures = [
         "CALL create_nppes_csv('nppes_sample');",
         "CALL create_nppes_csv('nppes_raw');",
-    )
+    ]
+
     try:
-        with engine.begin() as conn:
-            for procedure in procedure_list:
+        for procedure in summary_view_procedures:
+            logging.info(f"Executing: '{procedure}'...")
+            with engine.begin() as conn:
                 conn.execute(text(procedure))
     except Exception as e:
-        print(f"Error executing stored procedures: {e}")
+        print(f"Error executing procedure '{procedure}' : {e}")
+        return
+
+    complete_view_procedures = [
+        "CALL create_complete_nppes_table();",
+    ]
+
+    try:
+        for procedure in complete_view_procedures:
+            logging.info(f"Executing: '{procedure}'...")
+            with engine.begin() as conn:
+                conn.execute(text(procedure))
+    except Exception as e:
+        print(f"Error executing procedure '{procedure}' : {e}")
+        return
 
 def export_views_to_azure(blob_service_client, container_name, engine, view):
     try:
@@ -81,4 +106,4 @@ def export_views_to_azure(blob_service_client, container_name, engine, view):
 
             blob_client.upload_blob(csv_data, overwrite=True)
     except Exception as e:
-        print(f"Error exporting views to .csv: {e}")
+        print(f"Error exporting '{view}' to .csv: {e}")

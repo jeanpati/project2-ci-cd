@@ -2,6 +2,7 @@ import polars as pl
 import pyarrow.parquet as pq
 import logging
 import time
+from datetime import datetime
 from io import BytesIO
 
 from postgres_utils import copy_to_postgres
@@ -45,6 +46,7 @@ def process_parquet(blob_service_client, container_name, blob_name, engine, tabl
             "file": blob_name,
             "records": total_records,
             "batches": batch_num - 1,
-            "download_time": parquet_download_end - parquet_download_start,
-            "copy_time": parquet_copy_total_end - parquet_copy_total_start,
+            "download_time": float(parquet_download_end - parquet_download_start),
+            "copy_time": float(parquet_copy_total_end - parquet_copy_total_start),
+            "timestamp": datetime.now().isoformat()
         }
