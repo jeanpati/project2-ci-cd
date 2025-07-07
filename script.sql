@@ -99,13 +99,29 @@ CALL create_nppes_csv('nppes_raw');
 CALL create_nppes_csv('nppes_sample');
 
 
-CREATE OR REPLACE PROCEDURE create_complete_nppes_table()
+CREATE OR REPLACE PROCEDURE create_nppes_table_with_county()
 LANGUAGE plpgsql
 AS $$
 BEGIN
-	DROP TABLE IF EXISTS nppes_complete;
+	DROP TABLE IF EXISTS nppes_summary_with_county;
 
-    CREATE TABLE nppes_complete AS
+    CREATE TABLE nppes_summary_with_county AS
+		WITH gov_census AS (
+			select CONCAT(state, county) as county,
+			"B01001_001E" as population
+			from gov_census_data
+		),
+		ranked_counties_by_pop AS (
+			SELECT 
+			zc."ZIP" as zip_code,
+			gc.county,
+			gc.population ,
+			sf.countyname_fips as county_name,
+    		ROW_NUMBER() OVER (PARTITION BY zc."ZIP" ORDER BY population DESC) AS highest_pop_county_by_zip_rank
+			FROM gov_census gc
+			JOIN zip_county_032025 zc ON zc."COUNTY" = gc.county
+			JOIN ssa_fips_state_county_2025 sf ON sf.fipscounty = gc.county
+		)
 		SELECT nr."NPI",
 			nr."Entity Type", 
 		    nr."Entity Name",
@@ -115,11 +131,11 @@ BEGIN
 		    nr."Classification",
 		    nr."Specialization",
 		    nr.zip_code,
-		    sf.countyname_fips as county
+			rc.county_name AS county_with_highest_pop
 		FROM nppes_raw_summary nr
-		JOIN zip_county_032025 zc ON nr.zip_code = zc."ZIP"
-		JOIN ssa_fips_state_county_2025 sf ON sf.fipscounty = zc."COUNTY";
+		JOIN ranked_counties_by_pop rc ON nr.zip_code = rc.zip_code
+		WHERE rc.highest_pop_county_by_zip_rank = 1;
 END;
 $$;
 
-CALL create_complete_nppes_table();
+CALL create_nppes_table_with_county();
