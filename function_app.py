@@ -86,13 +86,12 @@ def http_trigger(req: func.HttpRequest) -> func.HttpResponse:
     views_to_export = [
         "nppes_raw_summary",
         "nppes_sample_summary",
-        "nppes_complete",
+        "nppes_summary_with_county",
     ]
 
     try:
-        for view in views_to_export:
-            logging.info(f"Exporting view {view} to .csv...")
-            export_views_to_azure(blob_service_client, container_name, postgres_engine, view)
+        logging.info(f"Exporting views to .csv...")
+        export_views_to_azure(blob_service_client, container_name, postgres_engine, views_to_export)
     except Exception as e:
         return func.HttpResponse(f"Error exporting views to Azure Blob Storage: {e}")
     

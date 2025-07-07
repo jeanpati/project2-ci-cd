@@ -4,6 +4,7 @@ from sqlalchemy import inspect, text
 import io
 import csv
 import logging
+import gc
 
 def create_postgres_engine():
     user = os.getenv("DATABASE_USER")
@@ -76,7 +77,7 @@ def call_procedures(engine, table_names):
         return
 
     complete_view_procedures = [
-        "CALL create_complete_nppes_table();",
+        "CALL create_nppes_table_with_county();",
     ]
 
     try:
@@ -88,22 +89,28 @@ def call_procedures(engine, table_names):
         print(f"Error executing procedure '{procedure}' : {e}")
         return
 
-def export_views_to_azure(blob_service_client, container_name, engine, view):
-    try:
-        blob_client = blob_service_client.get_blob_client(
-            container=container_name, blob=f"{view}.csv"
-        )
-        with engine.begin() as conn:
-            records = conn.execute(text(f"SELECT * FROM {view}"))
-            rows = records.fetchall()
-            columns = list(records.keys())
+def export_views_to_azure(blob_service_client, container_name, engine, views):
+        for view in views:
+            try:
+                blob_client = blob_service_client.get_blob_client(
+                    container=container_name, blob=f"{view}.csv"
+                )
+                with engine.begin() as conn:
+                    records = conn.execute(text(f"SELECT * FROM {view}"))
+                    rows = records.fetchall()
+                    columns = list(records.keys())
 
-            csv_buffer = io.StringIO()
-            writer = csv.writer(csv_buffer)
-            writer.writerow(columns)
-            writer.writerows(rows)
-            csv_data = csv_buffer.getvalue()
+                    csv_buffer = io.StringIO()
+                    writer = csv.writer(csv_buffer)
+                    writer.writerow(columns)
+                    writer.writerows(rows)
+                    csv_data = csv_buffer.getvalue()
 
-            blob_client.upload_blob(csv_data, overwrite=True)
-    except Exception as e:
-        print(f"Error exporting '{view}' to .csv: {e}")
+                blob_client.upload_blob(csv_data, overwrite=True)
+                logging.info(f"Exported {view}.csv to Azure Blob Storage!")
+
+                del rows, columns, csv_data, csv_buffer, writer, records
+                gc.collect()
+
+            except Exception as e:
+                print(f"Error exporting '{view}' to .csv: {e}")

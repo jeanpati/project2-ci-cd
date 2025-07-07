@@ -1,11 +1,3 @@
--- Indexes (unchanged)
-CREATE INDEX IF NOT EXISTS idx_nppes_raw_npi ON nppes_raw(npi);
-CREATE INDEX IF NOT EXISTS idx_nucc_taxonomy_250_code ON nucc_taxonomy_250(code);
-CREATE INDEX IF NOT EXISTS idx_zip ON zip_county_032025(zip);
-CREATE INDEX IF NOT EXISTS idx_nppes_zip ON nppes_raw(provider_business_practice_location_address_postal_code);
-CREATE INDEX IF NOT EXISTS idx_county_zip ON zip_county_032025(county);
-CREATE INDEX IF NOT EXISTS idx_county_ssa ON ssa_fips_state_county_2025(fipscounty);
-
 CREATE OR REPLACE PROCEDURE create_nppes_csv(src_table_name TEXT)
 LANGUAGE plpgsql
 AS $$
@@ -13,7 +5,13 @@ DECLARE
     view_name TEXT := src_table_name || '_summary';
 BEGIN
     EXECUTE format($f$
-        DROP VIEW IF EXISTS %I;
+
+        CREATE INDEX IF NOT EXISTS idx_nppes_raw_npi ON nppes_raw(npi);
+        CREATE INDEX IF NOT EXISTS idx_nucc_taxonomy_250_code ON nucc_taxonomy_250(code);
+        CREATE INDEX IF NOT EXISTS idx_zip ON zip_county_032025(zip);
+        CREATE INDEX IF NOT EXISTS idx_nppes_zip ON nppes_raw(provider_business_practice_location_address_postal_code);
+        CREATE INDEX IF NOT EXISTS idx_county_zip ON zip_county_032025(county);
+        CREATE INDEX IF NOT EXISTS idx_county_ssa ON ssa_fips_state_county_2025(fipscounty);
 
         CREATE OR REPLACE VIEW %I AS
         WITH entity_names AS (
@@ -93,39 +91,7 @@ BEGIN
         JOIN taxonomy_codes tc ON tc.npi = np.npi
         JOIN nucc_taxonomy_250 nt ON nt.code = tc.taxonomy_code AND tc.taxonomy_code IS NOT NULL;
     $f$,
-    view_name, view_name, src_table_name, src_table_name, src_table_name, src_table_name
+    view_name, src_table_name, src_table_name, src_table_name, src_table_name
     );
 END;
 $$;
-
--- If you need to:
--- DROP PROCEDURE create_nppes_csv(text)
-
-CALL create_nppes_csv('nppes_raw');
-CALL create_nppes_csv('nppes_sample');
-
-
-CREATE OR REPLACE PROCEDURE create_complete_nppes_table()
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    DROP TABLE IF EXISTS nppes_complete;
-
-    CREATE TABLE nppes_complete AS
-        SELECT nr.npi,
-            nr.entity_type, 
-            nr.entity_name,
-            nr.practice_address,
-            nr.taxonomy_code,
-            nr.grouping,
-            nr.classification,
-            nr.specialization,
-            nr.zip_code,
-            sf.countyname_fips AS county
-        FROM nppes_raw_summary nr
-        JOIN zip_county_032025 zc ON nr.zip_code = zc.zip
-        JOIN ssa_fips_state_county_2025 sf ON sf.fipscounty = zc.county;
-END;
-$$;
-
-CALL create_complete_nppes_table();
