@@ -56,5 +56,3 @@ def process_parquet(blob_service_client, container_name, blob_name, engine, tabl
             "copy_time": float(parquet_copy_total_end - parquet_copy_total_start),
             "timestamp": datetime.now().isoformat(),
         }
-
-    print("hello")
