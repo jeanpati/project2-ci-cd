@@ -11,3 +11,9 @@ polars
 pyarrow
 fastexcel
 
+pytest
+flake8
+isort
+mypy
+black
+pandas-stubs
