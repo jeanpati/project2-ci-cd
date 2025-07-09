@@ -5,7 +5,8 @@ import time
 from datetime import datetime
 
 
-from postgres_utils import copy_to_postgres
+from utils.postgres_utils import copy_to_postgres
+
 
 def get_data_from_api_endpoint(url):
     data = requests.get(url).json()
@@ -14,8 +15,9 @@ def get_data_from_api_endpoint(url):
     pl_df = pl.DataFrame(rows, schema=columns)
     return pl_df
 
+
 def process_json(url, engine, table_name):
-    logging.info(f'\nAttempting to GET data from census API endpoint...')
+    logging.info(f"\nAttempting to GET data from census API endpoint...")
     json_download_start = time.perf_counter()
     data = get_data_from_api_endpoint(url)
     json_download_end = time.perf_counter()
@@ -32,4 +34,3 @@ def process_json(url, engine, table_name):
         "copy_time": float(json_copy_total_end - json_copy_total_start),
         "timestamp": datetime.now().isoformat(),
     }
-        

@@ -5,7 +5,7 @@ import time
 from datetime import datetime
 from io import BytesIO
 
-from postgres_utils import copy_to_postgres
+from utils.postgres_utils import copy_to_postgres
 
 
 def download_parquet_from_blob(blob_service_client, container_name, blob_name):

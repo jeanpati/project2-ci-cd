@@ -5,7 +5,8 @@ import logging
 import csv
 from datetime import datetime
 
-from postgres_utils import copy_to_postgres
+from utils.postgres_utils import copy_to_postgres
+
 
 def batch_from_csv_file(csv_path, batch_size=1000):
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -19,14 +20,18 @@ def batch_from_csv_file(csv_path, batch_size=1000):
         schema_overrides=schema,
     )
 
+
 def download_csv_from_blob_batched(blob_service_client, container_name, blob_name):
     try:
         blob_client = blob_service_client.get_blob_client(
             container=container_name, blob=blob_name
         )
         if blob_name.endswith(".xlsx"):
-            with tempfile.NamedTemporaryFile(delete=True, suffix=".xlsx") as tmp_xlsx, \
-                 tempfile.NamedTemporaryFile(delete=True, suffix=".csv") as tmp_csv:
+            with tempfile.NamedTemporaryFile(
+                delete=True, suffix=".xlsx"
+            ) as tmp_xlsx, tempfile.NamedTemporaryFile(
+                delete=True, suffix=".csv"
+            ) as tmp_csv:
                 stream = blob_client.download_blob()
                 for chunk in stream.chunks():
                     tmp_xlsx.write(chunk)
@@ -45,13 +50,18 @@ def download_csv_from_blob_batched(blob_service_client, container_name, blob_nam
     except Exception as e:
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
+
 def process_csv(blob_service_client, container_name, blob_name, engine, table_name):
-    logging.info(f'\nAttempting to download "{blob_name}" from container "{container_name}"...')
+    logging.info(
+        f'\nAttempting to download "{blob_name}" from container "{container_name}"...'
+    )
     csv_download_start = time.perf_counter()
-    csv_batches = download_csv_from_blob_batched(blob_service_client, container_name, blob_name)
+    csv_batches = download_csv_from_blob_batched(
+        blob_service_client, container_name, blob_name
+    )
     csv_download_end = time.perf_counter()
     if csv_batches is not None:
-        csv_copy_total_start = time.perf_counter()       
+        csv_copy_total_start = time.perf_counter()
         batch_num = 1
         total_records = 0
         while True:
@@ -64,11 +74,11 @@ def process_csv(blob_service_client, container_name, blob_name, engine, table_na
                 csv_copy_end = time.perf_counter()
                 logging.info(
                     f"Batch {batch_num}: Records: {pl_df.shape[0]} Duration: {csv_copy_end - csv_copy_start:.2f}s"
-                )            
+                )
                 batch_num += 1
                 total_records += pl_df.shape[0]
                 del pl_df
-        csv_copy_total_end = time.perf_counter()        
+        csv_copy_total_end = time.perf_counter()
         return {
             "file": blob_name,
             "records": total_records,

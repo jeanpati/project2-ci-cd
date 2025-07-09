@@ -6,15 +6,15 @@ import logging
 from sqlalchemy import create_engine
 import polars as pl
 from urllib.parse import urlparse
-from postgres_utils import (
+from utils.postgres_utils import (
     create_postgres_engine,
     copy_to_postgres,
     call_procedures,
     export_views_to_azure,
 )
-from parquet_utils import process_parquet
-from csv_utils import process_csv
-from api_utils import process_json
+from utils.parquet_utils import process_parquet
+from utils.csv_utils import process_csv
+from utils.api_utils import process_json
 
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
