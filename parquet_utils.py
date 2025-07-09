@@ -7,6 +7,7 @@ from io import BytesIO
 
 from postgres_utils import copy_to_postgres
 
+
 def download_parquet_from_blob(blob_service_client, container_name, blob_name):
     try:
         blob_client = blob_service_client.get_blob_client(
@@ -23,10 +24,15 @@ def download_parquet_from_blob(blob_service_client, container_name, blob_name):
     except Exception as e:
         print(f"Error processing {blob_name} from Azure Blob Storage: {e}")
 
+
 def process_parquet(blob_service_client, container_name, blob_name, engine, table_name):
-    logging.info(f'\nAttempting to download "{blob_name}" from container "{container_name}"...')
+    logging.info(
+        f'\nAttempting to download "{blob_name}" from container "{container_name}"...'
+    )
     parquet_download_start = time.perf_counter()
-    parquet_batches = download_parquet_from_blob(blob_service_client, container_name, blob_name)
+    parquet_batches = download_parquet_from_blob(
+        blob_service_client, container_name, blob_name
+    )
     parquet_download_end = time.perf_counter()
     if parquet_batches is not None:
         parquet_copy_total_start = time.perf_counter()
@@ -48,5 +54,7 @@ def process_parquet(blob_service_client, container_name, blob_name, engine, tabl
             "batches": batch_num - 1,
             "download_time": float(parquet_download_end - parquet_download_start),
             "copy_time": float(parquet_copy_total_end - parquet_copy_total_start),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
+
+    print("hello")
